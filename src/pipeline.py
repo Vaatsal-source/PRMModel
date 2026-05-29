@@ -1,10 +1,12 @@
 from src.retriever import HotpotRetriever
 from src.hop_controller import HopController
-
+from src.query_rewriter import QueryRewriter
 
 class MultiHopQAPipeline:
 
     def __init__(self):
+
+        self.query_rewriter = QueryRewriter()
 
         self.retriever = HotpotRetriever()
 
@@ -67,11 +69,16 @@ class MultiHopQAPipeline:
                 break
 
             current_query = (
-                self.hop_controller
-                .reformulate_query(
+                self.query_rewriter
+                .rewrite(
                     query,
                     bridge_entity
                 )
+            )
+
+            print(
+                f"[INFO] Next Query: "
+                f"{current_query}"
             )
 
         return {
