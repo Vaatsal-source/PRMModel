@@ -31,3 +31,9 @@ TOP_K = 5
 # =========================
 
 SEED = 42
+
+EMBEDDINGS_PATH = FAISS_DIR / "embeddings.npy"
+FAISS_INDEX_PATH = FAISS_DIR / "hotpot.index"
+CHUNKS_PATH = FAISS_DIR / "chunks.pkl"
+
+FAISS_DIR.mkdir(parents=True, exist_ok=True)

@@ -3,10 +3,17 @@ from sentence_transformers import SentenceTransformer
 import faiss
 import numpy as np
 from tqdm import tqdm
+import os
+import pickle
+import torch
+
 
 from src.config import (
     EMBEDDING_MODEL_NAME,
-    TOP_K
+    TOP_K,
+    EMBEDDINGS_PATH,
+    FAISS_INDEX_PATH,
+    CHUNKS_PATH
 )
 
 
@@ -16,8 +23,17 @@ class HotpotRetriever:
 
         print("[INFO] Loading embedding model...")
 
+        self.device = (
+            "cuda"
+            if torch.cuda.is_available()
+            else "cpu"
+        )
+
+        print(f"[INFO] Using device: {self.device}")
+
         self.embedding_model = SentenceTransformer(
-            EMBEDDING_MODEL_NAME
+            EMBEDDING_MODEL_NAME,
+            device=self.device
         )
 
         self.dataset = None
@@ -39,6 +55,64 @@ class HotpotRetriever:
 
         print("[INFO] Dataset loaded.")
 
+    # =====================================
+    # SAVE CACHE
+    # =====================================
+
+    def save_cache(self, embeddings):
+
+        print("[INFO] Saving retrieval cache...")
+
+        np.save(
+            EMBEDDINGS_PATH,
+            embeddings
+        )
+
+        faiss.write_index(
+            self.index,
+            str(FAISS_INDEX_PATH)
+        )
+
+        with open(CHUNKS_PATH, "wb") as f:
+            pickle.dump(self.chunks, f)
+
+        print("[INFO] Cache saved.")
+
+    def load_hotpotqa(self):
+
+        print("[INFO] Loading HotpotQA dataset...")
+
+        self.dataset = load_dataset(
+            "hotpot_qa",
+            "distractor"
+        )
+
+        print("[INFO] Dataset loaded.")
+    # =====================================
+    # LOAD CACHE 
+    # =====================================
+    def load_cache(self):
+
+        if (
+            os.path.exists(EMBEDDINGS_PATH)
+            and os.path.exists(FAISS_INDEX_PATH)
+            and os.path.exists(CHUNKS_PATH)
+        ):
+
+            print("[INFO] Loading cached retrieval artifacts...")
+
+            self.index = faiss.read_index(
+               str(FAISS_INDEX_PATH)
+            )
+
+            with open(CHUNKS_PATH, "rb") as f:
+                self.chunks = pickle.load(f)
+
+            print("[INFO] Cache loaded.")
+
+            return True
+
+        return False
     # =====================================
     # BUILD CHUNKS
     # =====================================
@@ -84,6 +158,9 @@ class HotpotRetriever:
 
     def build_faiss_index(self):
 
+        if self.load_cache():
+            return
+
         print("[INFO] Generating embeddings...")
 
         texts = [
@@ -93,6 +170,7 @@ class HotpotRetriever:
 
         embeddings = self.embedding_model.encode(
             texts,
+            batch_size=64,
             convert_to_numpy=True,
             show_progress_bar=True
         )
@@ -108,7 +186,7 @@ class HotpotRetriever:
         index.add(embeddings)
 
         self.index = index
-
+        self.save_cache(embeddings)
         print("[INFO] FAISS index built.")
 
     # =====================================
