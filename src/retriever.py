@@ -162,7 +162,7 @@ class HotpotRetriever:
         print("[INFO] Generating embeddings...")
 
         texts = [
-            chunk["text"]
+            f"{chunk['title']} {chunk['text']}"
             for chunk in self.chunks
         ]
 
