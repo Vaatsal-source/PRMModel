@@ -12,7 +12,7 @@ class HopController:
         )
 
     # =====================================
-    # EXTRACT ENTITIES + LABELS
+    # EXTRACT ENTITIES
     # =====================================
 
     def extract_entities(self, text):
@@ -26,12 +26,11 @@ class HopController:
             if ent.label_ in [
                 "PERSON",
                 "ORG",
-                "GPE",
-                "WORK_OF_ART"
+                "GPE"
             ]:
 
                 entities.append(
-                    (ent.text.strip(), ent.label_)
+                    (ent.text, ent.label_)
                 )
 
         return entities
@@ -43,101 +42,59 @@ class HopController:
     def select_bridge_entity(
         self,
         query,
-        retrieved_chunks
+        retrieved_docs
     ):
 
-        candidate_entities = []
+        entity_frequency = {}
 
-        for chunk in retrieved_chunks:
+        for doc in retrieved_docs:
 
             entities = self.extract_entities(
-                chunk["text"]
+                doc["text"]
             )
 
-            candidate_entities.extend(
-                entities
-            )
+            for entity, label in entities:
 
-        if len(candidate_entities) == 0:
+                key = (entity, label)
+
+                entity_frequency[key] = (
+                    entity_frequency.get(key, 0) + 1
+                )
+
+        if len(entity_frequency) == 0:
+
             return None
 
-        entity_stats = {}
-
-        for entity, label in candidate_entities:
-
-            key = (entity, label)
-
-            entity_stats[key] = (
-                entity_stats.get(key, 0) + 1
-            )
+        sorted_entities = sorted(
+            entity_frequency.items(),
+            key=lambda x: x[1],
+            reverse=True
+        )
 
         print("\n[DEBUG] Candidate Entities:")
 
-        for (entity, label), freq in sorted(
-            entity_stats.items(),
-            key=lambda x: x[1],
-            reverse=True
-        )[:15]:
+        for (entity, label), freq in sorted_entities:
 
             print(
-                f"{entity:<30}"
-                f"{label:<15}"
+                f"{entity:30s} "
+                f"{label:10s} "
                 f"freq={freq}"
             )
 
-        label_priority = {
-            "PERSON": 0,
-            "ORG": 1,
-            "GPE": 2,
-            "WORK_OF_ART": 3
-        }
+        query_lower = query.lower()
 
-        ranked_entities = sorted(
-            entity_stats.items(),
-            key=lambda x: (
-                label_priority.get(
-                    x[0][1],
-                    999
-                ),
-                -x[1]
-            )
-        )
+        for (entity, label), freq in sorted_entities:
 
-        question_text = query.lower()
-
-        for (entity, label), freq in ranked_entities:
-
-            if entity.lower() not in question_text:
+            if (
+                label == "PERSON"
+                and entity.lower() not in query_lower
+            ):
 
                 print(
-                    f"\n[INFO] Selected Bridge Entity:"
-                    f" {entity} ({label})"
+                    f"\n[INFO] Selected Bridge Entity: "
+                    f"{entity}"
                 )
 
                 return entity
 
-        best_entity = ranked_entities[0][0][0]
-
-        print(
-            f"\n[INFO] Fallback Bridge Entity:"
-            f" {best_entity}"
-        )
-
-        return best_entity
-
-    # =====================================
-    # REFORM QUERY
-    # =====================================
-
-    def reformulate_query(
-        self,
-        original_query,
-        bridge_entity
-    ):
-
-        reformulated_query = (
-            f"{bridge_entity} "
-            f"{original_query}"
-        )
-
-        return reformulated_query
+        return sorted_entities[0][0][0]

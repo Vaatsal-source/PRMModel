@@ -2,19 +2,24 @@ class QueryRewriter:
 
     def rewrite(
         self,
-        original_query,
+        original_question,
         bridge_entity
     ):
 
-        q = original_query.lower()
+        question = original_question.lower()
 
-        if "born" in q:
-            return f"Where was {bridge_entity} born?"
+        if "author of" in question:
 
-        if "country" in q:
-            return f"{bridge_entity} birthplace country"
+            return (
+                f"Where was {bridge_entity} born?"
+            )
 
-        if "author" in q:
-            return f"Information about {bridge_entity}"
+        if "born" in question:
 
-        return f"{bridge_entity}"
+            return (
+                f"Where was {bridge_entity} born?"
+            )
+
+        return (
+            f"{bridge_entity} {original_question}"
+        )

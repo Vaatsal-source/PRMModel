@@ -1,20 +1,10 @@
-from datasets import load_dataset
 from sentence_transformers import SentenceTransformer
-import faiss
 import numpy as np
-from tqdm import tqdm
-import os
-import pickle
 import torch
-
 
 from src.config import (
     EMBEDDING_MODEL_NAME,
-    RETRIEVAL_K,
-    FINAL_K,
-    EMBEDDINGS_PATH,
-    FAISS_INDEX_PATH,
-    CHUNKS_PATH
+    TOP_K
 )
 
 
@@ -32,210 +22,78 @@ class HotpotRetriever:
 
         print(f"[INFO] Using device: {self.device}")
 
-        self.embedding_model = SentenceTransformer(
+        self.model = SentenceTransformer(
             EMBEDDING_MODEL_NAME,
             device=self.device
         )
 
-        self.dataset = None
-        self.chunks = []
-        self.index = None
-
     # =====================================
-    # LOAD DATASET
+    # BUILD DOCS FROM SINGLE HOTPOT SAMPLE
     # =====================================
 
-    def load_hotpotqa(self):
+    def build_docs(self, sample):
 
-        print("[INFO] Loading HotpotQA dataset...")
+        docs = []
 
-        self.dataset = load_dataset(
-            "hotpotqa/hotpot_qa",
-            "distractor"
-        )
+        titles = sample["context"]["title"]
 
-        print("[INFO] Dataset loaded.")
+        sentences = sample["context"]["sentences"]
 
-        found = False
-
-        for chunk in self.chunks:
-
-            if "J. K. Rowling" in chunk["title"]:
-
-                print(chunk["title"])
-                found = True
-
-            if not found:
-                print("NO ROWLING PAGE FOUND")
-
-    # =====================================
-    # SAVE CACHE
-    # =====================================
-
-    def save_cache(self, embeddings):
-
-        print("[INFO] Saving retrieval cache...")
-
-        np.save(
-            EMBEDDINGS_PATH,
-            embeddings
-        )
-
-        faiss.write_index(
-            self.index,
-            str(FAISS_INDEX_PATH)
-        )
-
-        with open(CHUNKS_PATH, "wb") as f:
-            pickle.dump(self.chunks, f)
-
-        print("[INFO] Cache saved.")
-
-    
-    # =====================================
-    # LOAD CACHE 
-    # =====================================
-    def load_cache(self):
-
-        if (
-            os.path.exists(EMBEDDINGS_PATH)
-            and os.path.exists(FAISS_INDEX_PATH)
-            and os.path.exists(CHUNKS_PATH)
+        for title, sent_list in zip(
+            titles,
+            sentences
         ):
 
-            print("[INFO] Loading cached retrieval artifacts...")
-
-            self.index = faiss.read_index(
-               str(FAISS_INDEX_PATH)
-            )
-
-            with open(CHUNKS_PATH, "rb") as f:
-                self.chunks = pickle.load(f)
-
-            print("[INFO] Cache loaded.")
-
-            return True
-
-        return False
-    # =====================================
-    # BUILD CHUNKS
-    # =====================================
-
-    def build_chunks(self, split="validation"):
-
-        print("[INFO] Building paragraph chunks...")
-
-        samples = self.dataset[split]
-
-        chunks = []
-
-        chunk_id = 0
-
-        seen_texts = set()
-        for sample in tqdm(samples):
-
-            context = sample["context"]
-
-            titles = context["title"]
-            sentences = context["sentences"]
-
-            for title, sent_list in zip(titles, sentences):
-
-                paragraph = " ".join(sent_list)
-                
-                if paragraph in seen_texts:
-                    continue
-                seen_texts.add(paragraph)
-
-                chunk = {
-                    "chunk_id": chunk_id,
-                    "title": title,
-                    "text": paragraph
-                }
-                
-
-                chunks.append(chunk)
-
-                chunk_id += 1
-
-        self.chunks = chunks
-
-        print(f"[INFO] Total chunks: {len(chunks)}")
-
-        rowling_count = 0
-
-        for chunk in chunks:
-        
-            if "J. K. Rowling" in chunk["title"]:
-                print(chunk["title"])
-                rowling_count += 1
-        
-        print(f"\nROWLING PAGES FOUND: {rowling_count}")
-
-    # =====================================
-    # BUILD FAISS INDEX
-    # =====================================
-
-    def build_faiss_index(self):
-
-        if self.load_cache():
-            return
-
-        print("[INFO] Generating embeddings...")
-
-        texts = [
-            f"{chunk['title']} {chunk['text']}"
-            for chunk in self.chunks
-        ]
-
-        embeddings = self.embedding_model.encode(
-            texts,
-            batch_size=64,
-            convert_to_numpy=True,
-            show_progress_bar=True
-        )
-
-        embeddings = embeddings.astype("float32")
-
-        print("[INFO] Creating FAISS index...")
-
-        dimension = embeddings.shape[1]
-
-        index = faiss.IndexFlatL2(dimension)
-
-        index.add(embeddings)
-
-        self.index = index
-        self.save_cache(embeddings)
-        print("[INFO] FAISS index built.")
-
-    # =====================================
-    # RETRIEVE
-    # =====================================
-
-    def retrieve(self, query, top_k=RETRIEVAL_K):
-
-        query_embedding = self.embedding_model.encode(
-            [query],
-            convert_to_numpy=True
-        ).astype("float32")
-
-        distances, indices = self.index.search(
-            query_embedding,
-            top_k
-        )
-
-        retrieved_chunks = []
-
-        for idx, distance in zip(indices[0], distances[0]):
-
-            chunk = self.chunks[idx]
-
-            retrieved_chunks.append({
-                "chunk_id": chunk["chunk_id"],
-                "title": chunk["title"],
-                "text": chunk["text"],
-                "distance": float(distance)
+            docs.append({
+                "title": title,
+                "text": " ".join(sent_list)
             })
 
-        return retrieved_chunks
+        return docs
+
+    # =====================================
+    # RETRIEVE INSIDE CURRENT SAMPLE ONLY
+    # =====================================
+
+    def retrieve(
+        self,
+        query,
+        docs,
+        top_k=TOP_K
+    ):
+
+        texts = [
+            f"{doc['title']} {doc['text']}"
+            for doc in docs
+        ]
+
+        doc_embeddings = self.model.encode(
+            texts,
+            convert_to_numpy=True,
+            normalize_embeddings=True
+        )
+
+        query_embedding = self.model.encode(
+            query,
+            convert_to_numpy=True,
+            normalize_embeddings=True
+        )
+
+        scores = np.dot(
+            doc_embeddings,
+            query_embedding
+        )
+
+        ranked_indices = np.argsort(scores)[::-1]
+
+        results = []
+
+        for idx in ranked_indices[:top_k]:
+
+            results.append({
+                "title": docs[idx]["title"],
+                "text": docs[idx]["text"],
+                "score": float(scores[idx])
+            })
+
+        return results

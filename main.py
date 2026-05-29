@@ -1,3 +1,5 @@
+from datasets import load_dataset
+
 from src.pipeline import MultiHopQAPipeline
 from src.utils import set_seed
 from src.config import SEED
@@ -7,42 +9,76 @@ def main():
 
     set_seed(SEED)
 
-    pipeline = MultiHopQAPipeline()
+    print("[INFO] Loading HotpotQA...")
 
-    query = (
-        "The author of Harry Potter "
-        "was born in which country?"
+    dataset = load_dataset(
+        "hotpotqa/hotpot_qa",
+        "distractor"
     )
 
-    output = pipeline.answer_question(query)
+    sample = dataset["validation"][0]
 
-    print("\n" + "=" * 60)
+    print("\n" + "=" * 80)
+    print("QUESTION")
+    print("=" * 80)
+    print(sample["question"])
 
-    print("FINAL OUTPUT")
+    print("\n" + "=" * 80)
+    print("GOLD ANSWER")
+    print("=" * 80)
+    print(sample["answer"])
 
-    print("=" * 60)
+    print("\n" + "=" * 80)
+    print("AVAILABLE DOCUMENTS")
+    print("=" * 80)
+
+    for idx, title in enumerate(
+        sample["context"]["title"]
+    ):
+
+        print(f"{idx+1}. {title}")
+
+    pipeline = MultiHopQAPipeline()
+
+    output = pipeline.answer_question(
+        sample,
+        hops=2
+    )
+
+    print("\n" + "=" * 80)
+    print("PIPELINE OUTPUT")
+    print("=" * 80)
 
     for step in output["reasoning_steps"]:
 
-        print(f"\nHOP {step['hop']}")
+        print(
+            f"\nHOP {step['hop']}"
+        )
 
-        print(f"QUERY: {step['query']}")
+        print(
+            f"QUERY: {step['query']}"
+        )
 
-        for i, retrieved in enumerate(
-            step["retrieved"]
-        ):
+        for doc in step["retrieved"]:
 
-            print(f"\nRESULT {i+1}")
+            print("\n----------------")
 
             print(
-                f"TITLE: "
-                f"{retrieved['title']}"
+                f"TITLE: {doc['title']}"
+            )
+
+            print(
+                f"SCORE: {doc['score']:.4f}"
             )
 
             print(
                 f"TEXT: "
-                f"{retrieved['text'][:300]}"
+                f"{doc['text'][:300]}"
             )
+
+    print("\n" + "=" * 80)
+    print("DONE")
+    print("=" * 80)
 
 
 if __name__ == "__main__":

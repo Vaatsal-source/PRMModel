@@ -1,43 +1,39 @@
 from src.retriever import HotpotRetriever
 from src.hop_controller import HopController
 from src.query_rewriter import QueryRewriter
-from src.reranker import Reranker
-from src.config import RETRIEVAL_K, FINAL_K
 
 
 class MultiHopQAPipeline:
 
     def __init__(self):
 
-        self.reranker = Reranker()
-
-        self.query_rewriter = QueryRewriter()
-
         self.retriever = HotpotRetriever()
 
         self.hop_controller = HopController()
 
-        self.retriever.load_hotpotqa()
-
-        self.retriever.build_chunks()
-
-        self.retriever.build_faiss_index()
+        self.query_rewriter = QueryRewriter()
 
     # =====================================
-    # RUN MULTI-HOP PIPELINE
+    # RUN MULTI-HOP
     # =====================================
 
     def answer_question(
         self,
-        query,
+        sample,
         hops=2
     ):
 
+        question = sample["question"]
+
+        docs = self.retriever.build_docs(
+            sample
+        )
+
+        current_query = question
+
         reasoning_steps = []
 
-        current_query = query
-
-        all_retrieved_chunks = []
+        all_docs = []
 
         for hop in range(hops):
 
@@ -45,28 +41,10 @@ class MultiHopQAPipeline:
 
             retrieved = self.retriever.retrieve(
                 current_query,
-                top_k=RETRIEVAL_K
+                docs
             )
 
-            retrieved = self.reranker.rerank(
-                current_query,
-                retrieved,
-                top_k=FINAL_K
-            )
-
-            print("\n[INFO] Top reranked documents:")
-
-            for i, doc in enumerate(retrieved[:3]):
-
-                print(
-                    f"{i+1}. "
-                    f"{doc['title']} | "
-                    f"Score={doc['rerank_score']:.4f}"
-                )
-
-            all_retrieved_chunks.extend(
-                retrieved
-            )
+            all_docs.extend(retrieved)
 
             reasoning_steps.append({
                 "hop": hop + 1,
@@ -82,18 +60,19 @@ class MultiHopQAPipeline:
                 )
             )
 
+            if bridge_entity is None:
+
+                break
+
             print(
                 f"[INFO] Bridge Entity: "
                 f"{bridge_entity}"
             )
 
-            if bridge_entity is None:
-                break
-
             current_query = (
                 self.query_rewriter
                 .rewrite(
-                    query,
+                    question,
                     bridge_entity
                 )
             )
@@ -104,7 +83,8 @@ class MultiHopQAPipeline:
             )
 
         return {
-            "question": query,
+            "question": question,
+            "answer": sample["answer"],
             "reasoning_steps": reasoning_steps,
-            "retrieved_context": all_retrieved_chunks
+            "retrieved_context": all_docs
         }
