@@ -118,6 +118,7 @@ class HotpotRetriever:
 
         chunk_id = 0
 
+        seen_texts = set()
         for sample in tqdm(samples):
 
             context = sample["context"]
@@ -128,12 +129,17 @@ class HotpotRetriever:
             for title, sent_list in zip(titles, sentences):
 
                 paragraph = " ".join(sent_list)
+                
+                if paragraph in seen_texts:
+                    continue
+                seen_texts.add(paragraph)
 
                 chunk = {
                     "chunk_id": chunk_id,
                     "title": title,
                     "text": paragraph
                 }
+                
 
                 chunks.append(chunk)
 
