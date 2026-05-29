@@ -49,7 +49,7 @@ class HotpotRetriever:
         print("[INFO] Loading HotpotQA dataset...")
 
         self.dataset = load_dataset(
-            "hotpot_qa",
+            "hotpotqa/hotpot_qa",
             "distractor"
         )
 
@@ -78,16 +78,7 @@ class HotpotRetriever:
 
         print("[INFO] Cache saved.")
 
-    def load_hotpotqa(self):
-
-        print("[INFO] Loading HotpotQA dataset...")
-
-        self.dataset = load_dataset(
-            "hotpot_qa",
-            "distractor"
-        )
-
-        print("[INFO] Dataset loaded.")
+    
     # =====================================
     # LOAD CACHE 
     # =====================================
