@@ -162,6 +162,16 @@ class HotpotRetriever:
 
         print(f"[INFO] Total chunks: {len(chunks)}")
 
+        rowling_count = 0
+
+        for chunk in chunks:
+        
+            if "J. K. Rowling" in chunk["title"]:
+                print(chunk["title"])
+                rowling_count += 1
+        
+        print(f"\nROWLING PAGES FOUND: {rowling_count}")
+
     # =====================================
     # BUILD FAISS INDEX
     # =====================================
