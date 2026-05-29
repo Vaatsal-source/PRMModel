@@ -1,10 +1,15 @@
 from src.retriever import HotpotRetriever
 from src.hop_controller import HopController
 from src.query_rewriter import QueryRewriter
+from src.reranker import Reranker
+from src.config import RETRIEVAL_K, FINAL_K
+
 
 class MultiHopQAPipeline:
 
     def __init__(self):
+
+        self.reranker = Reranker()
 
         self.query_rewriter = QueryRewriter()
 
@@ -39,8 +44,25 @@ class MultiHopQAPipeline:
             print(f"\n[INFO] Hop {hop+1}")
 
             retrieved = self.retriever.retrieve(
-                current_query
+                current_query,
+                top_k=RETRIEVAL_K
             )
+
+            retrieved = self.reranker.rerank(
+                current_query,
+                retrieved,
+                top_k=FINAL_K
+            )
+
+            print("\n[INFO] Top reranked documents:")
+
+            for i, doc in enumerate(retrieved[:3]):
+
+                print(
+                    f"{i+1}. "
+                    f"{doc['title']} | "
+                    f"Score={doc['rerank_score']:.4f}"
+                )
 
             all_retrieved_chunks.extend(
                 retrieved

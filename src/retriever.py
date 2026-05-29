@@ -10,7 +10,8 @@ import torch
 
 from src.config import (
     EMBEDDING_MODEL_NAME,
-    TOP_K,
+    RETRIEVAL_K,
+    FINAL_K,
     EMBEDDINGS_PATH,
     FAISS_INDEX_PATH,
     CHUNKS_PATH
@@ -190,7 +191,7 @@ class HotpotRetriever:
     # RETRIEVE
     # =====================================
 
-    def retrieve(self, query, top_k=TOP_K):
+    def retrieve(self, query, top_k=RETRIEVAL_K):
 
         query_embedding = self.embedding_model.encode(
             [query],

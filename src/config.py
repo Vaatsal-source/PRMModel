@@ -24,7 +24,8 @@ EMBEDDING_MODEL_NAME = "BAAI/bge-small-en-v1.5"
 # RETRIEVAL
 # =========================
 
-TOP_K = 5
+RETRIEVAL_K = 20
+FINAL_K = 5
 
 # =========================
 # RANDOMNESS
