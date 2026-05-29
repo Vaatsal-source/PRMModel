@@ -56,6 +56,18 @@ class HotpotRetriever:
 
         print("[INFO] Dataset loaded.")
 
+        found = False
+
+        for chunk in self.chunks:
+
+            if "J. K. Rowling" in chunk["title"]:
+
+                print(chunk["title"])
+                found = True
+
+            if not found:
+                print("NO ROWLING PAGE FOUND")
+
     # =====================================
     # SAVE CACHE
     # =====================================
