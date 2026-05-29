@@ -1,4 +1,4 @@
-from src.retriever import HotpotRetriever
+from src.pipeline import MultiHopQAPipeline
 from src.utils import set_seed
 from src.config import SEED
 
@@ -7,36 +7,42 @@ def main():
 
     set_seed(SEED)
 
-    retriever = HotpotRetriever()
-
-    retriever.load_hotpotqa()
-
-    retriever.build_chunks()
-
-    retriever.build_faiss_index()
+    pipeline = MultiHopQAPipeline()
 
     query = (
         "The author of Harry Potter "
         "was born in which country?"
     )
 
-    results = retriever.retrieve(query)
+    output = pipeline.answer_question(query)
 
     print("\n" + "=" * 60)
 
-    print(f"QUERY: {query}")
+    print("FINAL OUTPUT")
 
     print("=" * 60)
 
-    for i, result in enumerate(results):
+    for step in output["reasoning_steps"]:
 
-        print(f"\nRESULT {i+1}")
+        print(f"\nHOP {step['hop']}")
 
-        print(f"TITLE: {result['title']}")
+        print(f"QUERY: {step['query']}")
 
-        print(f"TEXT: {result['text'][:300]}")
+        for i, retrieved in enumerate(
+            step["retrieved"]
+        ):
 
-        print(f"DISTANCE: {result['distance']}")
+            print(f"\nRESULT {i+1}")
+
+            print(
+                f"TITLE: "
+                f"{retrieved['title']}"
+            )
+
+            print(
+                f"TEXT: "
+                f"{retrieved['text'][:300]}"
+            )
 
 
 if __name__ == "__main__":
