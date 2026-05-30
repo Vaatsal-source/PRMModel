@@ -1,43 +1,23 @@
-from transformers import pipeline
 import torch
-
+from transformers import pipeline
+from src.config import QA_MODEL
 
 class AnswerGenerator:
-
     def __init__(self):
-
-        print("[INFO] Loading QA model...")
-
         device = 0 if torch.cuda.is_available() else -1
-
         self.qa_pipeline = pipeline(
             "question-answering",
-            model="deepset/roberta-base-squad2",
+            model=QA_MODEL,
             device=device
         )
 
-    # =====================================
-    # GENERATE ANSWER
-    # =====================================
-
-    def generate_answer(
-        self,
-        question,
-        documents
-    ):
-
-        if len(documents) == 0:
-
+    def generate_answer(self, question: str, evidence_list: list) -> str:
+        if not evidence_list:
             return "Unknown"
-
-        context = "\n".join(
-            doc["text"]
-            for doc in documents
-        )
-
-        result = self.qa_pipeline(
-            question=question,
-            context=context[:4000]
-        )
-
-        return result["answer"]
+            
+        # Join extracted contextual documents into a single block
+        combined_context = "\n".join([f"Document: {e['title']}\n{e['text']}" for e in evidence_list])
+        
+        # Guard rail against model max context limit truncation
+        result = self.qa_pipeline(question=question, context=combined_context[:4000])
+        return result["answer"].strip()
