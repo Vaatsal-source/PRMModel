@@ -1,33 +1,39 @@
 from pathlib import Path
 
-# =====================================
-# PATHS
-# =====================================
-
 ROOT_DIR = Path(__file__).resolve().parent.parent
 
 DATA_DIR = ROOT_DIR / "data"
-RESULTS_DIR = ROOT_DIR / "results"
-LOGS_DIR = ROOT_DIR / "logs"
+FAISS_DIR = DATA_DIR / "faiss"
 
-DATA_DIR.mkdir(exist_ok=True)
-RESULTS_DIR.mkdir(exist_ok=True)
-LOGS_DIR.mkdir(exist_ok=True)
+FAISS_DIR.mkdir(
+    parents=True,
+    exist_ok=True
+)
 
 # =====================================
-# MODEL CONFIG
+# MODELS
 # =====================================
 
-EMBEDDING_MODEL_NAME = "BAAI/bge-small-en-v1.5"
+EMBEDDING_MODEL_NAME = (
+    "BAAI/bge-small-en-v1.5"
+)
+
+RERANKER_MODEL_NAME = (
+    "cross-encoder/ms-marco-MiniLM-L-6-v2"
+)
 
 # =====================================
 # RETRIEVAL
 # =====================================
 
-TOP_K = 3
+RETRIEVAL_K = 10
+
+RERANK_TOP_K = 3
+
+MAX_HOPS = 3
 
 # =====================================
-# RANDOMNESS
+# RANDOM
 # =====================================
 
 SEED = 42

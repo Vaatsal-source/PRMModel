@@ -1,10 +1,9 @@
 from sentence_transformers import SentenceTransformer
-import numpy as np
 import torch
 
 from src.config import (
     EMBEDDING_MODEL_NAME,
-    TOP_K
+    RETRIEVAL_K
 )
 
 
@@ -20,7 +19,9 @@ class HotpotRetriever:
             else "cpu"
         )
 
-        print(f"[INFO] Using device: {self.device}")
+        print(
+            f"[INFO] Using device: {self.device}"
+        )
 
         self.model = SentenceTransformer(
             EMBEDDING_MODEL_NAME,
@@ -28,7 +29,7 @@ class HotpotRetriever:
         )
 
     # =====================================
-    # BUILD DOCS FROM SINGLE HOTPOT SAMPLE
+    # BUILD DOCS FROM HOTPOT SAMPLE
     # =====================================
 
     def build_docs(self, sample):
@@ -36,7 +37,6 @@ class HotpotRetriever:
         docs = []
 
         titles = sample["context"]["title"]
-
         sentences = sample["context"]["sentences"]
 
         for title, sent_list in zip(
@@ -52,48 +52,56 @@ class HotpotRetriever:
         return docs
 
     # =====================================
-    # RETRIEVE INSIDE CURRENT SAMPLE ONLY
+    # RETRIEVE
     # =====================================
 
     def retrieve(
         self,
-        query,
+        question,
         docs,
-        top_k=TOP_K
+        top_k=RETRIEVAL_K
     ):
 
-        texts = [
+        corpus = [
+
             f"{doc['title']} {doc['text']}"
+
             for doc in docs
         ]
 
         doc_embeddings = self.model.encode(
-            texts,
-            convert_to_numpy=True,
-            normalize_embeddings=True
+            corpus,
+            convert_to_tensor=True
         )
 
         query_embedding = self.model.encode(
-            query,
-            convert_to_numpy=True,
-            normalize_embeddings=True
+            question,
+            convert_to_tensor=True
         )
 
-        scores = np.dot(
-            doc_embeddings,
+        scores = (
             query_embedding
+            @ doc_embeddings.T
         )
 
-        ranked_indices = np.argsort(scores)[::-1]
+        scores = scores.cpu().tolist()
 
-        results = []
+        retrieved = []
 
-        for idx in ranked_indices[:top_k]:
+        for doc, score in zip(
+            docs,
+            scores
+        ):
 
-            results.append({
-                "title": docs[idx]["title"],
-                "text": docs[idx]["text"],
-                "score": float(scores[idx])
+            retrieved.append({
+                "title": doc["title"],
+                "text": doc["text"],
+                "score": float(score)
             })
 
-        return results
+        retrieved.sort(
+            key=lambda x: x["score"],
+            reverse=True
+        )
+
+        return retrieved[:top_k]

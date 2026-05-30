@@ -1,7 +1,15 @@
 from datasets import load_dataset
 
-from src.pipeline import MultiHopQAPipeline
+from src.retriever import (
+    HotpotRetriever
+)
+
+from src.reranker import (
+    CrossEncoderReranker
+)
+
 from src.utils import set_seed
+
 from src.config import SEED
 
 
@@ -9,75 +17,110 @@ def main():
 
     set_seed(SEED)
 
-    print("[INFO] Loading HotpotQA...")
+    print(
+        "[INFO] Loading HotpotQA..."
+    )
 
     dataset = load_dataset(
         "hotpotqa/hotpot_qa",
         "distractor"
     )
 
-    sample = dataset["validation"][0]
+    sample = dataset[
+        "validation"
+    ][0]
 
-    print("\n" + "=" * 80)
+    question = sample["question"]
+
+    print("\n" + "="*80)
     print("QUESTION")
-    print("=" * 80)
-    print(sample["question"])
+    print("="*80)
+    print(question)
 
-    print("\n" + "=" * 80)
+    print("\n" + "="*80)
     print("GOLD ANSWER")
-    print("=" * 80)
+    print("="*80)
     print(sample["answer"])
 
-    print("\n" + "=" * 80)
-    print("AVAILABLE DOCUMENTS")
-    print("=" * 80)
+    # =====================================
+    # RETRIEVER
+    # =====================================
 
-    for idx, title in enumerate(
-        sample["context"]["title"]
-    ):
-        print(f"{idx+1}. {title}")
-
-    pipeline = MultiHopQAPipeline()
-
-    output = pipeline.answer_question(
-        sample,
-        hops=2
+    retriever = (
+        HotpotRetriever()
     )
 
-    print("\n")
-    print("=" * 80)
-    print("PREDICTED ANSWER")
-    print("=" * 80)
-    print(output["predicted_answer"])
+    docs = retriever.build_docs(
+        sample
+    )
 
-    print("\n")
-    print("=" * 80)
-    print("GOLD ANSWER")
-    print("=" * 80)
-    print(output["gold_answer"])
+    retrieved = (
+        retriever.retrieve(
+            question,
+            docs
+        )
+    )
 
-    print("\n")
-    print("=" * 80)
-    print("REASONING TRACE")
-    print("=" * 80)
+    print("\n" + "="*80)
+    print("RETRIEVAL RESULTS")
+    print("="*80)
 
-    for hop_data in output["reasoning_trace"]:
+    for idx, doc in enumerate(
+        retrieved[:5]
+    ):
 
-        print(f"\nHOP {hop_data['hop']}")
-        print("-" * 60)
+        print(
+            f"\n{idx+1}. "
+            f"{doc['title']}"
+        )
 
-        for step in hop_data["steps"]:
+        print(
+            f"Score: "
+            f"{doc['score']:.4f}"
+        )
 
-            print(
-                f"{step['title']:<40} "
-                f"PRM={step['score']:.4f}"
-            )
+    # =====================================
+    # RERANKER
+    # =====================================
 
-    print("\n")
-    print("=" * 80)
+    reranker = (
+        CrossEncoderReranker()
+    )
+
+    reranked = (
+        reranker.rerank(
+            question,
+            retrieved
+        )
+    )
+
+    print("\n" + "="*80)
+    print("RERANKED RESULTS")
+    print("="*80)
+
+    for idx, doc in enumerate(
+        reranked
+    ):
+
+        print(
+            f"\n{idx+1}. "
+            f"{doc['title']}"
+        )
+
+        print(
+            f"Rerank Score: "
+            f"{doc['rerank_score']:.4f}"
+        )
+
+        print(
+            doc["text"][:250]
+        )
+
+    print("\n" + "="*80)
     print("DONE")
-    print("=" * 80)
+    print("="*80)
 
 
 if __name__ == "__main__":
+
     main()
