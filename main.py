@@ -35,7 +35,6 @@ def main():
     for idx, title in enumerate(
         sample["context"]["title"]
     ):
-
         print(f"{idx+1}. {title}")
 
     pipeline = MultiHopQAPipeline()
@@ -46,60 +45,36 @@ def main():
     )
 
     print("\n")
-    print("="*80)
+    print("=" * 80)
     print("PREDICTED ANSWER")
-    print("="*80)
-    
+    print("=" * 80)
     print(output["predicted_answer"])
-    
+
     print("\n")
-    print("="*80)
+    print("=" * 80)
     print("GOLD ANSWER")
-    print("="*80)
-    
+    print("=" * 80)
     print(output["gold_answer"])
 
-    print("\n" + "=" * 80)
-    print("PIPELINE OUTPUT")
+    print("\n")
+    print("=" * 80)
+    print("REASONING TRACE")
     print("=" * 80)
 
-    for hop in output["reasoning_trace"]:
+    for hop_data in output["reasoning_trace"]:
 
-        print(f"\nHOP {hop['hop']}")
-    
-        for step in hop["steps"]:
-    
-            print(
-                f"{step['title']} "
-                f"| Score={step['score']:.4f}"
-            )
+        print(f"\nHOP {hop_data['hop']}")
+        print("-" * 60)
 
-        print(
-            f"\nHOP {step['hop']}"
-        )
-
-        print(
-            f"QUERY: {step['query']}"
-        )
-
-        for doc in step["retrieved"]:
-
-            print("\n----------------")
+        for step in hop_data["steps"]:
 
             print(
-                f"TITLE: {doc['title']}"
+                f"{step['title']:<40} "
+                f"PRM={step['score']:.4f}"
             )
 
-            print(
-                f"SCORE: {doc['score']:.4f}"
-            )
-
-            print(
-                f"TEXT: "
-                f"{doc['text'][:300]}"
-            )
-
-    print("\n" + "=" * 80)
+    print("\n")
+    print("=" * 80)
     print("DONE")
     print("=" * 80)
 
