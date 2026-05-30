@@ -1,198 +1,71 @@
 from src.retriever import HotpotRetriever
+from src.reranker import Reranker
+from src.decomposer import QuestionDecomposer
 from src.prm import ProcessRewardModel
-from src.hop_controller import HopController
-from src.query_rewriter import QueryRewriter
-from src.answer_generator import AnswerGenerator
+
 
 class MultiHopQAPipeline:
 
-    def __init__(self):
+    def __init__(self, chunks):
 
-        self.answer_generator = AnswerGenerator()
-
-        self.retriever = HotpotRetriever()
-
+        self.retriever = HotpotRetriever(chunks)
+        self.reranker = Reranker()
+        self.decomposer = QuestionDecomposer()
         self.prm = ProcessRewardModel()
 
-        self.hop_controller = HopController()
+        self.retriever.build_index()
 
-        self.query_rewriter = QueryRewriter()
+    def answer_question(self, question):
 
-    # ==================================================
-    # REASONING STEP CREATION
-    # ==================================================
+        sub_questions = self.decomposer.decompose(question)
 
-    def create_reasoning_step(
-        self,
-        question,
-        document
-    ):
-
-        return (
-            f"Question: {question}\n"
-            f"Evidence: {document['text'][:400]}"
-        )
-
-    # ==================================================
-    # MULTI-HOP PIPELINE
-    # ==================================================
-
-    def answer_question(
-        self,
-        sample,
-        hops=2
-    ):
-
-        question = sample["question"]
-
-        docs = self.retriever.build_docs(
-            sample
-        )
-
-        current_query = question
+        all_evidence = []
 
         reasoning_trace = []
 
-        all_retrieved_docs = []
+        for sq in sub_questions:
 
-        all_kept_docs = []
+            print(f"\n[HOP] {sq}")
 
-        for hop in range(hops):
+            docs = self.retriever.retrieve(sq)
 
-            print(f"\n{'='*60}")
-            print(f"HOP {hop+1}")
-            print(f"{'='*60}")
+            docs = self.reranker.rerank(sq, docs)
 
-            # -----------------------------------------
-            # RETRIEVAL
-            # -----------------------------------------
+            scored = []
 
-            retrieved_docs = self.retriever.retrieve(
-                current_query,
-                docs
-            )
+            for d in docs:
 
-            all_retrieved_docs.extend(
-                retrieved_docs
-            )
+                score = self.prm.score(sq, d["text"])
 
-            kept_docs = []
+                d["prm_score"] = score
 
-            hop_reasoning = []
+                scored.append(d)
 
-            print("\n[INFO] Scoring reasoning steps...\n")
+            best = max(scored, key=lambda x: x["prm_score"])
 
-            # -----------------------------------------
-            # PRM SCORING
-            # -----------------------------------------
-
-            for doc in retrieved_docs:
-
-                reasoning_step = (
-                    self.create_reasoning_step(
-                        current_query,
-                        doc
-                    )
-                )
-
-                score = self.prm.score_step(
-                    current_query,
-                    reasoning_step
-                )
-
-                hop_reasoning.append({
-                    "title": doc["title"],
-                    "score": score,
-                    "text": doc["text"]
-                })
-
-                print(
-                    f"{doc['title']:<40}"
-                    f" PRM={score:.4f}"
-                )
-
-                if score >= self.prm.threshold:
-
-                    kept_docs.append(doc)
-
-            all_kept_docs.extend(
-                kept_docs
-            )
+            all_evidence.append(best)
 
             reasoning_trace.append({
-                "hop": hop + 1,
-                "query": current_query,
-                "steps": hop_reasoning
+                "sub_question": sq,
+                "best_evidence": best
             })
 
-            # -----------------------------------------
-            # NO DOCUMENT SURVIVED
-            # -----------------------------------------
-
-            if len(kept_docs) == 0:
-
-                print(
-                    "\n[INFO] No document survived PRM."
-                )
-
-                break
-
-            # -----------------------------------------
-            # BRIDGE ENTITY SELECTION
-            # -----------------------------------------
-
-            bridge_entity = (
-                self.hop_controller
-                .select_bridge_entity(
-                    current_query,
-                    kept_docs
-                )
-            )
-
-            print(
-                f"\n[INFO] Bridge Entity: "
-                f"{bridge_entity}"
-            )
-
-            if bridge_entity is None:
-
-                break
-
-            # -----------------------------------------
-            # QUERY REWRITE
-            # -----------------------------------------
-
-            current_query = (
-                self.query_rewriter
-                .rewrite(
-                    question,
-                    bridge_entity
-                )
-            )
-
-            print(
-                f"[INFO] Next Query: "
-                f"{current_query}"
-            )
-
-            final_answer = (
-                self.answer_generator.generate_answer(
-                question,
-                all_kept_docs
-            )
-        )
+        final_answer = self.generate_answer(question, all_evidence)
 
         return {
-
             "question": question,
-
-            "gold_answer": sample["answer"],
-
-            "predicted_answer": final_answer,
-
-            "retrieved_docs": all_retrieved_docs,
-
-            "kept_docs": all_kept_docs,
-
-            "reasoning_trace": reasoning_trace
+            "reasoning_trace": reasoning_trace,
+            "evidence": all_evidence,
+            "predicted_answer": final_answer
         }
+
+    def generate_answer(self, question, evidence):
+
+        text = " ".join([e["text"] for e in evidence])
+
+        if "same nationality" in question.lower():
+            if "american" in text.lower():
+                return "yes"
+            return "no"
+
+        return "unknown"

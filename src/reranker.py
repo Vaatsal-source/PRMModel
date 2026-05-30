@@ -1,68 +1,31 @@
 from sentence_transformers import CrossEncoder
 
-from src.config import (
-    RERANKER_MODEL_NAME,
-    RERANK_TOP_K
-)
+from src.config import RERANKER_MODEL, RERANK_K
 
-
-class CrossEncoderReranker:
+class Reranker:
 
     def __init__(self):
 
-        print(
-            "[INFO] Loading reranker..."
-        )
+        print("[INFO] Loading reranker...")
+        self.model = CrossEncoder(RERANKER_MODEL)
 
-        self.model = CrossEncoder(
-            RERANKER_MODEL_NAME
-        )
-
-    # =====================================
-    # RERANK
-    # =====================================
-
-    def rerank(
-        self,
-        question,
-        docs,
-        top_k=RERANK_TOP_K
-    ):
+    def rerank(self, query, docs):
 
         pairs = []
 
-        for doc in docs:
+        for d in docs:
+            text = d["title"] + " " + d["text"]
+            pairs.append((query, text))
 
-            pairs.append(
-                (
-                    question,
-                    doc["text"]
-                )
-            )
+        scores = self.model.predict(pairs)
 
-        scores = self.model.predict(
-            pairs
-        )
+        for d, s in zip(docs, scores):
+            d["rerank_score"] = float(s)
 
-        reranked = []
-
-        for doc, score in zip(
+        docs = sorted(
             docs,
-            scores
-        ):
-
-            item = doc.copy()
-
-            item["rerank_score"] = (
-                float(score)
-            )
-
-            reranked.append(item)
-
-        reranked.sort(
-            key=lambda x:
-            x["rerank_score"],
+            key=lambda x: x["rerank_score"],
             reverse=True
         )
 
-        return reranked[:top_k]
+        return docs[:RERANK_K]

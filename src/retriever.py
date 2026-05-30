@@ -1,107 +1,72 @@
+import faiss
+import numpy as np
+import pickle
 from sentence_transformers import SentenceTransformer
 import torch
 
 from src.config import (
-    EMBEDDING_MODEL_NAME,
-    RETRIEVAL_K
+    EMBEDDING_MODEL,
+    TOP_K,
+    FAISS_INDEX_PATH,
+    CHUNKS_PATH
 )
-
 
 class HotpotRetriever:
 
-    def __init__(self):
+    def __init__(self, chunks=None):
+
+        self.device = "cuda" if torch.cuda.is_available() else "cpu"
 
         print("[INFO] Loading embedding model...")
+        self.model = SentenceTransformer(EMBEDDING_MODEL, device=self.device)
 
-        self.device = (
-            "cuda"
-            if torch.cuda.is_available()
-            else "cpu"
-        )
+        self.index = None
+        self.chunks = chunks or []
 
-        print(
-            f"[INFO] Using device: {self.device}"
-        )
+    def build_index(self):
 
-        self.model = SentenceTransformer(
-            EMBEDDING_MODEL_NAME,
-            device=self.device
-        )
+        print("[INFO] Building FAISS index...")
 
-    # =====================================
-    # BUILD DOCS FROM HOTPOT SAMPLE
-    # =====================================
+        texts = [c["title"] + " " + c["text"] for c in self.chunks]
 
-    def build_docs(self, sample):
+        emb = self.model.encode(
+            texts,
+            convert_to_numpy=True,
+            show_progress_bar=True
+        ).astype("float32")
 
-        docs = []
+        dim = emb.shape[1]
+        self.index = faiss.IndexFlatL2(dim)
+        self.index.add(emb)
 
-        titles = sample["context"]["title"]
-        sentences = sample["context"]["sentences"]
+        with open(CHUNKS_PATH, "wb") as f:
+            pickle.dump(self.chunks, f)
 
-        for title, sent_list in zip(
-            titles,
-            sentences
-        ):
+        faiss.write_index(self.index, str(FAISS_INDEX_PATH))
 
-            docs.append({
-                "title": title,
-                "text": " ".join(sent_list)
+    def load(self):
+
+        self.index = faiss.read_index(str(FAISS_INDEX_PATH))
+
+        with open(CHUNKS_PATH, "rb") as f:
+            self.chunks = pickle.load(f)
+
+    def retrieve(self, query, k=TOP_K):
+
+        q_emb = self.model.encode([query]).astype("float32")
+
+        dist, idx = self.index.search(q_emb, k)
+
+        results = []
+
+        for i, d in zip(idx[0], dist[0]):
+
+            c = self.chunks[i]
+
+            results.append({
+                "title": c["title"],
+                "text": c["text"],
+                "score": float(d)
             })
 
-        return docs
-
-    # =====================================
-    # RETRIEVE
-    # =====================================
-
-    def retrieve(
-        self,
-        question,
-        docs,
-        top_k=RETRIEVAL_K
-    ):
-
-        corpus = [
-
-            f"{doc['title']} {doc['text']}"
-
-            for doc in docs
-        ]
-
-        doc_embeddings = self.model.encode(
-            corpus,
-            convert_to_tensor=True
-        )
-
-        query_embedding = self.model.encode(
-            question,
-            convert_to_tensor=True
-        )
-
-        scores = (
-            query_embedding
-            @ doc_embeddings.T
-        )
-
-        scores = scores.cpu().tolist()
-
-        retrieved = []
-
-        for doc, score in zip(
-            docs,
-            scores
-        ):
-
-            retrieved.append({
-                "title": doc["title"],
-                "text": doc["text"],
-                "score": float(score)
-            })
-
-        retrieved.sort(
-            key=lambda x: x["score"],
-            reverse=True
-        )
-
-        return retrieved[:top_k]
+        return results

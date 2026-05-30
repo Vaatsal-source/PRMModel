@@ -5,35 +5,13 @@ ROOT_DIR = Path(__file__).resolve().parent.parent
 DATA_DIR = ROOT_DIR / "data"
 FAISS_DIR = DATA_DIR / "faiss"
 
-FAISS_DIR.mkdir(
-    parents=True,
-    exist_ok=True
-)
+EMBEDDING_MODEL = "BAAI/bge-small-en-v1.5"
+RERANKER_MODEL = "cross-encoder/ms-marco-MiniLM-L-6-v2"
 
-# =====================================
-# MODELS
-# =====================================
+TOP_K = 5
+RERANK_K = 3
 
-EMBEDDING_MODEL_NAME = (
-    "BAAI/bge-small-en-v1.5"
-)
+FAISS_INDEX_PATH = FAISS_DIR / "index.faiss"
+CHUNKS_PATH = FAISS_DIR / "chunks.pkl"
 
-RERANKER_MODEL_NAME = (
-    "cross-encoder/ms-marco-MiniLM-L-6-v2"
-)
-
-# =====================================
-# RETRIEVAL
-# =====================================
-
-RETRIEVAL_K = 10
-
-RERANK_TOP_K = 3
-
-MAX_HOPS = 3
-
-# =====================================
-# RANDOM
-# =====================================
-
-SEED = 42
+FAISS_DIR.mkdir(parents=True, exist_ok=True)
