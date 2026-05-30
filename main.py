@@ -45,6 +45,20 @@ def main():
         hops=2
     )
 
+    print("\n")
+    print("="*80)
+    print("PREDICTED ANSWER")
+    print("="*80)
+    
+    print(output["predicted_answer"])
+    
+    print("\n")
+    print("="*80)
+    print("GOLD ANSWER")
+    print("="*80)
+    
+    print(output["gold_answer"])
+
     print("\n" + "=" * 80)
     print("PIPELINE OUTPUT")
     print("=" * 80)

@@ -1,14 +1,43 @@
+from transformers import pipeline
+import torch
+
+
 class AnswerGenerator:
 
-    def generate(
+    def __init__(self):
+
+        print("[INFO] Loading QA model...")
+
+        device = 0 if torch.cuda.is_available() else -1
+
+        self.qa_pipeline = pipeline(
+            "question-answering",
+            model="deepset/roberta-base-squad2",
+            device=device
+        )
+
+    # =====================================
+    # GENERATE ANSWER
+    # =====================================
+
+    def generate_answer(
         self,
-        retrieved_docs
+        question,
+        documents
     ):
 
-        combined = ""
+        if len(documents) == 0:
 
-        for doc in retrieved_docs:
+            return "Unknown"
 
-            combined += doc["text"] + "\n"
+        context = "\n".join(
+            doc["text"]
+            for doc in documents
+        )
 
-        return combined[:1000]
+        result = self.qa_pipeline(
+            question=question,
+            context=context[:4000]
+        )
+
+        return result["answer"]
