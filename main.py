@@ -63,7 +63,16 @@ def main():
     print("PIPELINE OUTPUT")
     print("=" * 80)
 
-    for step in output["reasoning_steps"]:
+    for hop in output["reasoning_trace"]:
+
+        print(f"\nHOP {hop['hop']}")
+    
+        for step in hop["steps"]:
+    
+            print(
+                f"{step['title']} "
+                f"| Score={step['score']:.4f}"
+            )
 
         print(
             f"\nHOP {step['hop']}"

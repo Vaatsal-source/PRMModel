@@ -43,13 +43,6 @@ class ProcessRewardModel:
             ]
         )[0]
 
-        score = float(score)
-
-        score = 1 / (
-            1 + torch.exp(
-                torch.tensor(-score)
-            )
-        )
 
         return float(score)
 
