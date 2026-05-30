@@ -1,21 +1,16 @@
-# Python
+# Machine Learning tracking & cache
+.pytest_cache/
 __pycache__/
 *.pyc
-
-# Virtual Environment
-.venv/
-
-# Jupyter
 .ipynb_checkpoints/
 
-# VSCode
-.vscode/
+# Local data & weights
+checkpoints/
+results/*.json
+results/*.csv
+results/plots/*.png
 
-# Data
-data/faiss/
-results/
-logs/
-
-# OS
-.DS_Store
-Thumbs.db
+# Virtual environments
+.venv/
+env/
+Venv/
