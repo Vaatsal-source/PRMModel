@@ -38,7 +38,6 @@ class PRMDataset(Dataset):
             return_tensors="pt"
         )
         
-        # Safeguard dimension reduction to guarantee flat vectors to the collation loader
         return {
             "input_ids": encoding["input_ids"].flatten(),
             "attention_mask": encoding["attention_mask"].flatten(),
@@ -48,7 +47,8 @@ class PRMDataset(Dataset):
 
 class PRMScorer(nn.Module):
     """
-    DeBERTa-v3-base Cross-Encoder that scores reasoning steps/evidence.
+    DeBERTa-v3-base Cross-Encoder that outputs raw logits for training numerical stability,
+    with an internal sigmoid method for clean probability extraction.
     """
     def __init__(self, model_name: str = "microsoft/deberta-v3-base"):
         super().__init__()
@@ -57,15 +57,13 @@ class PRMScorer(nn.Module):
         
         # Binary classification head processing the pooled representation
         self.classifier = nn.Linear(hidden_size, 1)
-        self.sigmoid = nn.Sigmoid()
 
     def forward(self, input_ids, attention_mask):
         outputs = self.encoder(input_ids=input_ids, attention_mask=attention_mask)
         # Use the CLS token representation (first token)
         cls_output = outputs.last_hidden_state[:, 0, :]
         logits = self.classifier(cls_output)
-        scores = self.sigmoid(logits)
-        return scores.squeeze(-1)
+        return logits.squeeze(-1) # Output raw un-activated logits (Safe for AMP Autocast)
 
 
 def train_prm(
@@ -78,7 +76,7 @@ def train_prm(
     device: str = "cuda" if torch.cuda.is_available() else "cpu"
 ):
     """
-    Fine-tuning sequence for training the PRM cross-encoder on Kaggle.
+    Fine-tuning sequence for training the PRM cross-encoder on Kaggle using BCEWithLogitsLoss.
     """
     print(f"Starting PRM Training on device: {device}...")
     tokenizer = AutoTokenizer.from_pretrained("microsoft/deberta-v3-base")
@@ -96,10 +94,10 @@ def train_prm(
         optimizer, num_warmup_steps=int(0.1 * total_steps), num_training_steps=total_steps
     )
     
-    criterion = nn.BCELoss()
+    # BCEWithLogitsLoss natively handles stability inside mixed-precision contexts
+    criterion = nn.BCEWithLogitsLoss()
     best_val_loss = float("inf")
     
-    # Robust check to guarantee AMP activation on any valid CUDA device signature configuration
     use_cuda = "cuda" in str(device)
     scaler = torch.cuda.amp.GradScaler(enabled=use_cuda)
     
@@ -115,8 +113,8 @@ def train_prm(
             labels = batch["label"].to(device)
             
             with torch.cuda.amp.autocast(enabled=use_cuda):
-                scores = model(input_ids, attention_mask)
-                loss = criterion(scores, labels)
+                logits = model(input_ids, attention_mask)
+                loss = criterion(logits, labels)
                 
             if use_cuda:
                 scaler.scale(loss).backward()
@@ -142,8 +140,8 @@ def train_prm(
                 labels = batch["label"].to(device)
                 
                 with torch.cuda.amp.autocast(enabled=use_cuda):
-                    scores = model(input_ids, attention_mask)
-                    val_loss = criterion(scores, labels)
+                    logits = model(input_ids, attention_mask)
+                    val_loss = criterion(logits, labels)
                 total_val_loss += val_loss.item()
                 
         avg_val_loss = total_val_loss / len(val_loader)
