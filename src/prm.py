@@ -3,7 +3,8 @@ import torch
 import torch.nn as nn
 import numpy as np
 from typing import List, Dict, Tuple
-from transformers import AutoTokenizer, AutoModel, AdamW, get_linear_schedule_with_warmup
+from transformers import AutoTokenizer, AutoModel, get_linear_schedule_with_warmup
+from torch.optim import AdamW
 from torch.utils.data import Dataset, DataLoader
 
 # Enforce strict reproducibility
@@ -37,10 +38,10 @@ class PRMDataset(Dataset):
             return_tensors="pt"
         )
         
-        # Squeeze out the batch dimension added by the tokenizer default return
+        # Safeguard dimension reduction to guarantee flat vectors to the collation loader
         return {
-            "input_ids": encoding["input_ids"].squeeze(0),
-            "attention_mask": encoding["attention_mask"].squeeze(0),
+            "input_ids": encoding["input_ids"].flatten(),
+            "attention_mask": encoding["attention_mask"].flatten(),
             "label": torch.tensor(item["label"], dtype=torch.float)
         }
 
@@ -98,8 +99,9 @@ def train_prm(
     criterion = nn.BCELoss()
     best_val_loss = float("inf")
     
-    # Mixed precision training initialization to conserve VRAM and boost processing speed
-    scaler = torch.cuda.amp.GradScaler(enabled=(device == "cuda"))
+    # Robust check to guarantee AMP activation on any valid CUDA device signature configuration
+    use_cuda = "cuda" in str(device)
+    scaler = torch.cuda.amp.GradScaler(enabled=use_cuda)
     
     for epoch in range(epochs):
         model.train()
@@ -112,11 +114,11 @@ def train_prm(
             attention_mask = batch["attention_mask"].to(device)
             labels = batch["label"].to(device)
             
-            with torch.cuda.amp.autocast(enabled=(device == "cuda")):
+            with torch.cuda.amp.autocast(enabled=use_cuda):
                 scores = model(input_ids, attention_mask)
                 loss = criterion(scores, labels)
                 
-            if device == "cuda":
+            if use_cuda:
                 scaler.scale(loss).backward()
                 scaler.step(optimizer)
                 scaler.update()
@@ -139,8 +141,9 @@ def train_prm(
                 attention_mask = batch["attention_mask"].to(device)
                 labels = batch["label"].to(device)
                 
-                scores = model(input_ids, attention_mask)
-                val_loss = criterion(scores, labels)
+                with torch.cuda.amp.autocast(enabled=use_cuda):
+                    scores = model(input_ids, attention_mask)
+                    val_loss = criterion(scores, labels)
                 total_val_loss += val_loss.item()
                 
         avg_val_loss = total_val_loss / len(val_loader)
@@ -158,7 +161,6 @@ def threshold_prune(passages: List[str], scores: List[float], t: float) -> List[
     Applies the PRM gate threshold ablation rule. 
     Filters out any context blocks that score strictly below the target threshold value.
     """
-    # FIX: Renamed 'pass' to 'p' to eliminate Python reserved keyword syntax parsing error
     pruned_passages = [p for p, score in zip(passages, scores) if score >= t]
     
     # Algorithmic Safety Fallback: If everything gets pruned, preserve at least the highest scoring chunk
@@ -169,7 +171,6 @@ def threshold_prune(passages: List[str], scores: List[float], t: float) -> List[
     return pruned_passages
 
 
-# Unit test block for local compilation verify check
 if __name__ == "__main__":
     print("=== Testing PRM Module Logic Locally ===")
     
@@ -178,10 +179,10 @@ if __name__ == "__main__":
     mock_scores = [0.25, 0.55, 0.85]
     
     print("Testing Ablation Threshold t=0.4:")
-    print("  Filtered:", threshold_prune(mock_passages, mock_scores, t=0.4))
+    print("   Filtered:", threshold_prune(mock_passages, mock_scores, t=0.4))
     
     print("Testing Ablation Threshold t=0.6:")
-    print("  Filtered:", threshold_prune(mock_passages, mock_scores, t=0.6))
+    print("   Filtered:", threshold_prune(mock_passages, mock_scores, t=0.6))
     
     print("Testing Safety Fallback (all scores low, t=0.6):")
-    print("  Filtered:", threshold_prune(mock_passages, [0.1, 0.2, 0.15], t=0.6))
+    print("   Filtered:", threshold_prune(mock_passages, [0.1, 0.2, 0.15], t=0.6))

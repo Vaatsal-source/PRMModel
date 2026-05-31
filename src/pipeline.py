@@ -2,7 +2,7 @@ import torch
 import numpy as np
 from typing import List, Dict, Any
 from datasets import load_dataset
-from transformers import AutoTokenizer, AutoModelForSeq2SeqLM
+from transformers import AutoTokenizer
 from src.retriever import HopController, LocalFAISSRetriever
 from src.prm import PRMScorer, threshold_prune
 
@@ -31,7 +31,9 @@ class MultiHopRAGPipeline:
         # 2. Initialize and load PRM Cross-Encoder
         self.prm_tokenizer = AutoTokenizer.from_pretrained("microsoft/deberta-v3-base")
         self.prm_model = PRMScorer().to(self.device)
-        if prm_checkpoint_path and torch.cuda.is_available():
+        
+        if prm_checkpoint_path:
+            # Removed the restriction checking for active CUDA global flags to allow flexible deployment
             self.prm_model.load_state_dict(torch.load(prm_checkpoint_path, map_location=self.device))
             print(f"Loaded tuned PRM weights from: {prm_checkpoint_path}")
         self.prm_model.eval()
@@ -59,6 +61,7 @@ class MultiHopRAGPipeline:
             ).to(self.device)
             
             with torch.no_grad():
+                # Cross-Encoder model outputs a scalar float representation per pair
                 score = self.prm_model(encoding["input_ids"], encoding["attention_mask"])
                 scores.append(score.item())
         return scores

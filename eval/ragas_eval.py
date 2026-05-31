@@ -1,5 +1,6 @@
 import os
 import json
+import torch
 import numpy as np
 import pandas as pd
 from typing import List, Dict, Any, Tuple
@@ -12,6 +13,10 @@ from ragas.metrics import (
     context_recall,
     answer_correctness,
 )
+
+# We need the Langchain HuggingFace integrations to bypass OpenAI
+from langchain_huggingface import HuggingFacePipeline, HuggingFaceEmbeddings, ChatHuggingFace
+from transformers import AutoModelForCausalLM, AutoTokenizer, pipeline, BitsAndBytesConfig
 
 # Force strict reproducibility
 SEED = 42
@@ -33,14 +38,12 @@ def bootstrap_confidence_interval(
     boot_means = []
     n = len(scores)
     
-    # Generate bootstrap samples by resampling with replacement
     for _ in range(num_bootstraps):
         boot_sample = np.random.choice(scores, size=n, replace=True)
         boot_means.append(np.mean(boot_sample))
         
     mean_score = float(np.mean(scores))
     
-    # Calculate lower and upper percentiles (e.g., 2.5th and 97.5th for 95% CI)
     lower_percentile = (1.0 - confidence_level) / 2.0 * 100
     upper_percentile = (1.0 + confidence_level) / 2.0 * 100
     
@@ -50,27 +53,72 @@ def bootstrap_confidence_interval(
     return mean_score, lower_bound, upper_bound
 
 
+def get_opensource_evaluators():
+    """
+    Spins up local LLM and Embedding models to evaluate RAGAS metrics 
+    without needing any external API keys.
+    """
+    print("Initializing local Open-Source Evaluation Stack (Phi-3 & BGE)...")
+    
+    # 1. Embeddings: Match our retriever pipeline (BGE-base) for semantic metrics
+    eval_embeddings = HuggingFaceEmbeddings(model_name="BAAI/bge-base-en-v1.5")
+    
+    # 2. LLM: Phi-3-mini loaded in 4-bit precision to fit safely in T4 VRAM
+    bnb_config = BitsAndBytesConfig(
+        load_in_4bit=True,
+        bnb_4bit_quant_type="nf4",
+        bnb_4bit_compute_dtype=torch.float16
+    )
+    
+    model_id = "microsoft/Phi-3-mini-4k-instruct"
+    tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=True)
+    model = AutoModelForCausalLM.from_pretrained(
+        model_id,
+        quantization_config=bnb_config,
+        device_map="auto",
+        trust_remote_code=True
+    )
+    
+    # Set up the text-generation pipeline with strict, deterministic generation rules
+    pipe = pipeline(
+        "text-generation", 
+        model=model, 
+        tokenizer=tokenizer, 
+        max_new_tokens=512,
+        do_sample=False,
+        temperature=0.0,
+        return_full_text=False
+    )
+    
+    # Wrap in Langchain Chat format, which Ragas v0.1.x strictly requires
+    base_llm = HuggingFacePipeline(pipeline=pipe)
+    eval_llm = ChatHuggingFace(llm=base_llm)
+    
+    return eval_llm, eval_embeddings
+
+
 def run_ragas_evaluation(pipeline_outputs_path: str, output_summary_path: str) -> Dict[str, Any]:
     """
-    Loads saved pipeline inference JSON tracking logs, prepares the data schema
-    for the Ragas engine, computes metrics, and bootstraps 95% CIs.
+    Loads saved pipeline inference JSON logs, prepares the data schema
+    for the Ragas engine, computes metrics using local models, and bootstraps 95% CIs.
     """
     print(f"Loading pipeline generation footprint from: {pipeline_outputs_path}")
     with open(pipeline_outputs_path, "r") as f:
         records = json.load(f)
         
-    # Re-map the structure to meet Ragas evaluation framework definitions
     ragas_data = {
         "question": [r["question"] for r in records],
         "contexts": [r["retrieved_context"] for r in records],
         "answer": [r["answer"] for r in records],
-        "ground_truths": [[r["gold_answer"]] for r in records] # Must be a wrapped sequence
+        "ground_truths": [[r["gold_answer"]] for r in records] 
     }
     
     dataset = Dataset.from_dict(ragas_data)
     
+    # Initialize the open-source engines
+    eval_llm, eval_embeddings = get_opensource_evaluators()
+    
     print("Invoking Ragas execution framework metrics sequence...")
-    # Bind specific evaluating metrics targeting our multi-hop design targets
     metrics = [
         faithfulness,
         answer_relevancy,
@@ -79,8 +127,13 @@ def run_ragas_evaluation(pipeline_outputs_path: str, output_summary_path: str) -
         answer_correctness
     ]
     
-    # Execute matrix evaluation
-    results_df = evaluate(dataset, metrics=metrics).to_pandas()
+    # Execute matrix evaluation injecting our local models
+    results_df = evaluate(
+        dataset, 
+        metrics=metrics,
+        llm=eval_llm,
+        embeddings=eval_embeddings
+    ).to_pandas()
     
     summary_report = {}
     print("\n=== Processing Bootstrap Confidence Intervals (No Subsampling) ===")
@@ -95,9 +148,7 @@ def run_ragas_evaluation(pipeline_outputs_path: str, output_summary_path: str) -
     
     for metric in metric_keys:
         if metric in results_df.columns:
-            # Clean up potential NaN values if an evaluation node timed out or dropped frame
             scores = results_df[metric].dropna().to_numpy()
-            
             mean_val, lower_ci, upper_ci = bootstrap_confidence_interval(scores, num_bootstraps=1000)
             
             summary_report[metric] = {
@@ -108,7 +159,6 @@ def run_ragas_evaluation(pipeline_outputs_path: str, output_summary_path: str) -
             }
             print(f"Metric: {metric.upper():<18} -> {summary_report[metric]['formatted']}")
             
-    # Write aggregated metrics report to local results disk
     os.makedirs(os.path.dirname(output_summary_path), exist_ok=True)
     with open(output_summary_path, "w") as f:
         json.dump(summary_report, f, indent=4)
@@ -118,7 +168,6 @@ def run_ragas_evaluation(pipeline_outputs_path: str, output_summary_path: str) -
 
 
 if __name__ == "__main__":
-    # Smoke-test data block to guarantee compilation boundaries hold up
     print("=== Testing Evaluation System Local Compilation ===")
     mock_records = [
         {
@@ -132,6 +181,6 @@ if __name__ == "__main__":
     mock_file = "results/test_outputs.json"
     os.makedirs("results", exist_ok=True)
     with open(mock_file, "w") as f:
-        json.load = json.dump(mock_records, f)
+        json.dump(mock_records, f)
         
     print("Bootstrapping validation verification check complete. Mock file generated.")

@@ -22,10 +22,16 @@ class HopController:
         self.device = device
         self.model_name = "google/flan-t5-large"
         self.tokenizer = AutoTokenizer.from_pretrained(self.model_name)
-        # Using bfloat16/float16 for Flan-T5 to respect our ~1.5 GB VRAM footprint constraint
+        
+        # Using bfloat16 for Flan-T5 on CUDA to respect VRAM constraints while maintaining numeric stability
+        if "cuda" in str(device):
+            current_dtype = torch.bfloat16 if torch.cuda.is_is_bf16_supported() else torch.float16
+        else:
+            current_dtype = torch.float32
+
         self.model = AutoModelForSeq2SeqLM.from_pretrained(
             self.model_name, 
-            torch_dtype=torch.float16 if "cuda" in device else torch.float32
+            torch_dtype=current_dtype
         ).to(self.device)
         self.model.eval()
 
@@ -106,7 +112,7 @@ class LocalFAISSRetriever:
         
         results = []
         for score, idx in zip(scores[0], indices[0]):
-            if idx != -1:  # Safeguard against FAISS out-of-bounds indicators
+            if idx != -1 and idx < len(self.paragraphs):  # Safeguard against FAISS out-of-bounds indicators
                 results.append((self.paragraphs[idx], float(score)))
         return results
 
@@ -139,7 +145,7 @@ if __name__ == "__main__":
     print(f"\nTesting Decomposition for: '{mock_question}'")
     sub_questions = controller.decompose(mock_question)
     for i, sub_q in enumerate(sub_questions, 1):
-        print(f"  Hop {i} Sub-Question: {sub_q}")
+        print(f"   Hop {i} Sub-Question: {sub_q}")
         
     # 4. Verify Local Vector Lookups
     print("\nBuilding Transient local FAISS index...")
@@ -148,4 +154,4 @@ if __name__ == "__main__":
     print(f"Querying Hop 1 target: '{sub_questions[0]}'")
     hop1_matches = retriever.iterative_retrieve(sub_questions[0], top_k=2)
     for txt, score in hop1_matches:
-        print(f"  [Score: {score:.4f}] -> {txt[:80]}...")
+        print(f"   [Score: {score:.4f}] -> {txt[:80]}...")
