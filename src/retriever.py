@@ -19,20 +19,16 @@ class HopController:
     multi-hop questions down into sequential single-hop search tasks.
     """
     def __init__(self, device: str = "cuda" if torch.cuda.is_available() else "cpu"):
-        self.device = device
+        # FORCE device to cpu for this heavy model to save VRAM for the PRM Scorer
+        self.device = "cpu" 
         self.model_name = "google/flan-t5-large"
         self.tokenizer = AutoTokenizer.from_pretrained(self.model_name)
         
-        # Using bfloat16 for Flan-T5 on CUDA to respect VRAM constraints while maintaining numeric stability
-        if "cuda" in str(device):
-            current_dtype = torch.bfloat16 if torch.cuda.is_is_bf16_supported() else torch.float16
-        else:
-            current_dtype = torch.float32
-
+        # Load Flan-T5 on CPU
         self.model = AutoModelForSeq2SeqLM.from_pretrained(
             self.model_name, 
-            torch_dtype=current_dtype
-        ).to(self.device)
+            torch_dtype=torch.float32
+        ).to("cpu")
         self.model.eval()
 
     def decompose(self, question: str) -> List[str]:
@@ -47,7 +43,7 @@ class HopController:
             f"Sub-questions (one per line, be concise):"
         )
         
-        inputs = self.tokenizer(prompt, return_tensors="pt").to(self.device)
+        inputs = self.tokenizer(prompt, return_tensors="pt").to("cpu")
         with torch.no_grad():
             outputs = self.model.generate(
                 **inputs, 
@@ -72,9 +68,10 @@ class LocalFAISSRetriever:
     candidate paragraphs provided in the HotpotQA distractor setting packet.
     """
     def __init__(self, device: str = "cuda" if torch.cuda.is_available() else "cpu"):
-        self.device = device
+        # FORCE embedder to CPU to save VRAM
+        self.device = "cpu"
         # BGE-base-en-v1.5 outputs 768-dimensional dense vectors
-        self.embedder = SentenceTransformer("BAAI/bge-base-en-v1.5", device=device)
+        self.embedder = SentenceTransformer("BAAI/bge-base-en-v1.5", device="cpu")
         self.dimension = 768
         self.paragraphs: List[str] = []
         self.index = None
@@ -123,10 +120,10 @@ if __name__ == "__main__":
     
     # 1. Initialize models
     print("Initializing components...")
-    controller = HopController(device="cpu")  # Using CPU locally for quick verification
+    controller = HopController(device="cpu")
     retriever = LocalFAISSRetriever(device="cpu")
     
-    # 2. Mock HotpotQA instance (1 Question, 10 Localized Paragraphs)
+    # 2. Mock HotpotQA instance
     mock_question = "Which film directed by Christopher Nolan stars the actor who played Arthur in Inception?"
     mock_paragraphs = [
         "Inception is a 2010 science fiction action film written and directed by Christopher Nolan.",
