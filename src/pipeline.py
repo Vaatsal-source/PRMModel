@@ -2,7 +2,7 @@ import os
 import gc
 import torch
 from typing import List, Dict, Any
-from transformers import AutoTokenizer, AutoModelForSequenceClassification
+from transformers import AutoTokenizer, AutoModelForSequenceClassification, pipeline
 from src.retriever import HopController, LocalFAISSRetriever
 
 class MultiHopRAGPipeline:
@@ -18,15 +18,17 @@ class MultiHopRAGPipeline:
         self.controller = HopController()
         self.retriever = LocalFAISSRetriever()
         
+        # Load lightweight synthesizer on CPU to meet the "synthesize answer" requirement 
+        # without spiking VRAM.
+        self.synthesizer = pipeline("text2text-generation", model="google/flan-t5-base", device="cpu")
+        
         print(f"Loading PRM Scorer (DeBERTa) onto {self.device}...")
-        # Using deberta-v3-base as the foundational architecture for the PRM
         self.prm_tokenizer = AutoTokenizer.from_pretrained("microsoft/deberta-v3-base")
         self.prm_model = AutoModelForSequenceClassification.from_pretrained(
             "microsoft/deberta-v3-base", 
             num_labels=1
         )
         
-        # Load your custom trained PRM weights safely
         if os.path.exists(prm_checkpoint_path):
             state_dict = torch.load(prm_checkpoint_path, map_location=self.device)
             self.prm_model.load_state_dict(state_dict, strict=False)
@@ -37,7 +39,6 @@ class MultiHopRAGPipeline:
         self.prm_model.to(self.device)
         self.prm_model.eval()
         
-        # Enable gradient checkpointing to aggressively preserve VRAM overhead
         if hasattr(self.prm_model, "gradient_checkpointing_enable"):
             self.prm_model.gradient_checkpointing_enable()
 
@@ -58,11 +59,9 @@ class MultiHopRAGPipeline:
             
             with torch.no_grad():
                 outputs = self.prm_model(encoding["input_ids"], encoding["attention_mask"])
-                # Extract scalar logits directly
                 score = torch.sigmoid(outputs.logits).squeeze().item()
                 scores.append(score)
                 
-            # Evacuate intermediate tensor footprints immediately
             del encoding
             if "cuda" in str(self.device):
                 torch.cuda.empty_cache()
@@ -73,47 +72,42 @@ class MultiHopRAGPipeline:
         """
         Executes sequential multi-hop decomposition, local indexing, and PRM verification.
         """
-        # Step 1: Algorithmic decomposition via Flan-T5
         sub_questions = self.controller.decompose(question)
-        
-        # Step 2: Build transient local vector space
         self.retriever.build_local_index(context_pool)
         
         hop1_context = ""
         hop1_retrieved: List[str] = []
         
-        # Hop 1 Execution Loop
         if len(sub_questions) > 0:
             hop1_matches = self.retriever.iterative_retrieve(sub_questions[0], top_k=5)
             hop1_paragraphs = [match[0] for match in hop1_matches]
-            
-            # Score Hop 1 candidates via the PRM Model
             hop1_scores = self._score_paragraphs_with_prm(sub_questions[0], hop1_paragraphs)
             
-            # Filter candidates clearing our step validation threshold
             for p, score in zip(hop1_paragraphs, hop1_scores):
                 if score >= self.threshold:
                     hop1_retrieved.append(p)
             
-            # Fallback if no candidate meets the filter threshold
             if not hop1_retrieved and hop1_paragraphs:
                 hop1_retrieved = [hop1_paragraphs[0]]
                 
             hop1_context = " ".join(hop1_retrieved)
 
-        # Hop 2 Execution Loop (Conditioned on Hop 1 insights)
         final_answer = "No clear answer could be formulated."
+        best_hop2_context = ""
+        
         if len(sub_questions) > 1:
             augmented_query = f"{sub_questions[1]} Context: {hop1_context}"
             hop2_matches = self.retriever.iterative_retrieve(augmented_query, top_k=3)
             hop2_paragraphs = [match[0] for match in hop2_matches]
-            
             hop2_scores = self._score_paragraphs_with_prm(sub_questions[1], hop2_paragraphs)
             
-            # Select the highest-scoring candidate path as the final anchor
             if hop2_scores:
                 best_idx = hop2_scores.index(max(hop2_scores))
-                final_answer = hop2_paragraphs[best_idx]
+                best_hop2_context = hop2_paragraphs[best_idx]
+                
+                # Synthesize the final answer using the filtered context
+                synth_prompt = f"Answer the question strictly based on the context.\nContext: {hop1_context} {best_hop2_context}\nQuestion: {question}\nAnswer:"
+                final_answer = self.synthesizer(synth_prompt, max_new_tokens=64)[0]['generated_text']
                 
         return {
             "decomposed_steps": sub_questions,
