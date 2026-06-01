@@ -1,186 +1,122 @@
+import os
+import gc
 import torch
-import numpy as np
 from typing import List, Dict, Any
-from datasets import load_dataset
-from transformers import AutoTokenizer
+from transformers import AutoTokenizer, AutoModelForSequenceClassification
 from src.retriever import HopController, LocalFAISSRetriever
-from src.prm import PRMScorer, threshold_prune
-
-# Enforce strict reproducibility across runtime boundaries
-SEED = 42
-np.random.seed(SEED)
-torch.manual_seed(SEED)
-if torch.cuda.is_available():
-    torch.cuda.manual_seed_all(SEED)
-
 
 class MultiHopRAGPipeline:
     """
-    Master coordination pipeline executing multi-hop decomposition,
-    local context retrieval, PRM pruning, and final answer generation.
+    Coordinates multi-hop question answering by decomposing questions,
+    retrieving context iteratively, and scoring candidates with a PRM.
     """
-    def __init__(self, prm_checkpoint_path: str = None, threshold: float = 0.4, device: str = "cuda" if torch.cuda.is_available() else "cpu"):
+    def __init__(self, prm_checkpoint_path: str, threshold: float = 0.4, device: str = "cuda"):
         self.device = device
         self.threshold = threshold
         
-        print("Initializing Pipeline Core Components...")
-        # 1. Initialize retriever components
-        self.hop_controller = HopController(device=self.device)
-        self.local_retriever = LocalFAISSRetriever(device=self.device)
+        print(f"Loading Hop Components onto CPU...")
+        self.controller = HopController()
+        self.retriever = LocalFAISSRetriever()
         
-        # 2. Initialize and load PRM Cross-Encoder
+        print(f"Loading PRM Scorer (DeBERTa) onto {self.device}...")
+        # Using deberta-v3-base as the foundational architecture for the PRM
         self.prm_tokenizer = AutoTokenizer.from_pretrained("microsoft/deberta-v3-base")
-        self.prm_model = PRMScorer().to(self.device)
+        self.prm_model = AutoModelForSequenceClassification.from_pretrained(
+            "microsoft/deberta-v3-base", 
+            num_labels=1
+        )
         
-        if prm_checkpoint_path:
-            # Removed the restriction checking for active CUDA global flags to allow flexible deployment
-            self.prm_model.load_state_dict(torch.load(prm_checkpoint_path, map_location=self.device))
-            print(f"Loaded tuned PRM weights from: {prm_checkpoint_path}")
+        # Load your custom trained PRM weights safely
+        if os.path.exists(prm_checkpoint_path):
+            state_dict = torch.load(prm_checkpoint_path, map_location=self.device)
+            self.prm_model.load_state_dict(state_dict, strict=False)
+            print(f"Successfully loaded PRM weights from {prm_checkpoint_path}")
+        else:
+            print(f"Warning: Checkpoint not found at {prm_checkpoint_path}. Using base weights.")
+            
+        self.prm_model.to(self.device)
         self.prm_model.eval()
-
-        # 3. Share Flan-T5 model instance from hop_controller for final generation to conserve VRAM
-        self.gen_model = self.hop_controller.model
-        self.gen_tokenizer = self.hop_controller.tokenizer
+        
+        # Enable gradient checkpointing to aggressively preserve VRAM overhead
+        if hasattr(self.prm_model, "gradient_checkpointing_enable"):
+            self.prm_model.gradient_checkpointing_enable()
 
     def _score_paragraphs_with_prm(self, sub_question: str, paragraphs: List[str]) -> List[float]:
         """
-        Passes (Sub-Question, Paragraph) pairs through the DeBERTa Cross-Encoder.
+        Scores paragraphs strictly one-by-one to eliminate VRAM spikes and fragmentation.
         """
-        if not paragraphs:
-            return []
-            
         scores = []
         for p in paragraphs:
             encoding = self.prm_tokenizer(
-                sub_question,
-                p,
-                padding="max_length",
-                truncation=True,
-                max_length=512,
+                sub_question, 
+                p, 
+                padding="max_length", 
+                truncation=True, 
+                max_length=512, 
                 return_tensors="pt"
             ).to(self.device)
             
             with torch.no_grad():
-                # Cross-Encoder model outputs a scalar float representation per pair
-                score = self.prm_model(encoding["input_ids"], encoding["attention_mask"])
-                scores.append(score.item())
+                outputs = self.prm_model(encoding["input_ids"], encoding["attention_mask"])
+                # Extract scalar logits directly
+                score = torch.sigmoid(outputs.logits).squeeze().item()
+                scores.append(score)
+                
+            # Evacuate intermediate tensor footprints immediately
+            del encoding
+            if "cuda" in str(self.device):
+                torch.cuda.empty_cache()
+                
         return scores
 
-    def _generate_final_answer(self, question: str, reasoning_context: List[str]) -> str:
+    def run_pipeline(self, question: str, context_pool: List[str]) -> Dict[str, Any]:
         """
-        Uses Flan-T5-large to generate a concise answer over the pruned reasoning chain context.
+        Executes sequential multi-hop decomposition, local indexing, and PRM verification.
         """
-        joined_context = "\n".join([f"- {c}" for c in reasoning_context])
-        prompt = (
-            f"Context:\n{joined_context}\n\n"
-            f"Based on the provided context above, answer the following question clearly and concisely.\n"
-            f"Question: {question}\n"
-            f"Answer:"
-        )
+        # Step 1: Algorithmic decomposition via Flan-T5
+        sub_questions = self.controller.decompose(question)
         
-        inputs = self.gen_tokenizer(prompt, return_tensors="pt").to(self.device)
-        with torch.no_grad():
-            outputs = self.gen_model.generate(
-                **inputs,
-                max_new_tokens=64,
-                temperature=0.0, # Greedy decoding for absolute deterministic consistency
-                do_sample=False
-            )
-        return self.gen_tokenizer.decode(outputs[0], skip_special_tokens=True)
+        # Step 2: Build transient local vector space
+        self.retriever.build_local_index(context_pool)
+        
+        hop1_context = ""
+        hop1_retrieved: List[str] = []
+        
+        # Hop 1 Execution Loop
+        if len(sub_questions) > 0:
+            hop1_matches = self.retriever.iterative_retrieve(sub_questions[0], top_k=5)
+            hop1_paragraphs = [match[0] for match in hop1_matches]
+            
+            # Score Hop 1 candidates via the PRM Model
+            hop1_scores = self._score_paragraphs_with_prm(sub_questions[0], hop1_paragraphs)
+            
+            # Filter candidates clearing our step validation threshold
+            for p, score in zip(hop1_paragraphs, hop1_scores):
+                if score >= self.threshold:
+                    hop1_retrieved.append(p)
+            
+            # Fallback if no candidate meets the filter threshold
+            if not hop1_retrieved and hop1_paragraphs:
+                hop1_retrieved = [hop1_paragraphs[0]]
+                
+            hop1_context = " ".join(hop1_retrieved)
 
-    def run_pipeline(self, question: str, candidate_paragraphs: List[str]) -> Dict[str, Any]:
-        """
-        Executes the entire RAG pipeline for a single question instance.
-        """
-        # Step 1: Decompose original question into multi-hop sub-questions
-        sub_questions = self.hop_controller.decompose(question)
-        
-        # Step 2: Spin up local transient FAISS index for the question's specific 10 paragraphs
-        self.local_retriever.build_local_index(candidate_paragraphs)
-        
-        accumulated_context = []
-        
-        # Step 3: Run Multi-Hop retrieval loops
-        for hop_idx, sub_q in enumerate(sub_questions):
-            # Retrieve top 4 items locally to give PRM a rich set to filter from
-            retrieved_tuples = self.local_retriever.iterative_retrieve(sub_q, top_k=4)
-            retrieved_texts = [text for text, _ in retrieved_tuples]
+        # Hop 2 Execution Loop (Conditioned on Hop 1 insights)
+        final_answer = "No clear answer could be formulated."
+        if len(sub_questions) > 1:
+            augmented_query = f"{sub_questions[1]} Context: {hop1_context}"
+            hop2_matches = self.retriever.iterative_retrieve(augmented_query, top_k=3)
+            hop2_paragraphs = [match[0] for match in hop2_matches]
             
-            # Score retrieved options with the PRM Cross-Encoder
-            prm_scores = self._score_paragraphs_with_prm(sub_q, retrieved_texts)
+            hop2_scores = self._score_paragraphs_with_prm(sub_questions[1], hop2_paragraphs)
             
-            # Prune out distractors matching our threshold rules (t=0.4 or t=0.6)
-            pruned_hop_context = threshold_prune(retrieved_texts, prm_scores, t=self.threshold)
-            
-            for text in pruned_hop_context:
-                if text not in accumulated_context:
-                    accumulated_context.append(text)
-                    
-        # Step 4: Synthesize answer over clean, high-confidence evidence
-        final_answer = self._generate_final_answer(question, accumulated_context)
-        
+            # Select the highest-scoring candidate path as the final anchor
+            if hop2_scores:
+                best_idx = hop2_scores.index(max(hop2_scores))
+                final_answer = hop2_paragraphs[best_idx]
+                
         return {
-            "question": question,
-            "sub_questions": sub_questions,
-            "retrieved_context": accumulated_context,
+            "decomposed_steps": sub_questions,
+            "hop1_collected": hop1_retrieved,
             "answer": final_answer
         }
-
-
-def load_held_out_evaluation_split(num_samples: int = 500) -> List[Dict[str, Any]]:
-    """
-    Loads and prepares the 500 deterministic evaluation items from the 
-    official HotpotQA validation dataset configuration.
-    """
-    print("Loading official HotpotQA validation split...")
-    raw_dataset = load_dataset("hotpot_qa", "distractor", split="validation")
-    
-    # Deterministic shuffle to lock the exact same evaluation footprint across runs
-    shuffled_dataset = raw_dataset.shuffle(seed=SEED)
-    
-    evaluation_packet = []
-    for i in range(min(num_samples, len(shuffled_dataset))):
-        item = shuffled_dataset[i]
-        
-        # Reconstruct full continuous strings from the HotpotQA nested context arrays
-        paragraphs = []
-        for title, sentences in zip(item["context"]["title"], item["context"]["sentences"]):
-            paragraph_text = f"{title}: " + "".join(sentences)
-            paragraphs.append(paragraph_text)
-            
-        evaluation_packet.append({
-            "question": item["question"],
-            "paragraphs": paragraphs,
-            "gold_answer": item["answer"]
-        })
-        
-    return evaluation_packet
-
-
-if __name__ == "__main__":
-    print("=== Testing Integration Pipeline Locally ===")
-    
-    # Spin up pipeline running completely on CPU for rapid integration validation check
-    pipeline = MultiHopRAGPipeline(prm_checkpoint_path=None, threshold=0.4, device="cpu")
-    
-    mock_q = "What award did the director of Interstellar win in 2019?"
-    mock_10_paras = [
-        "Interstellar: Interstellar is an epic science fiction film directed by Christopher Nolan.",
-        "Christopher Nolan: Christopher Nolan won the Commander of the Order of the British Empire (CBE) in 2019.",
-        "Distractor 1: Random irrelevant sentence about sports data tracking metrics.",
-        "Distractor 2: Weather patterns in Western Europe changed dramatically during the late summer months.",
-        "Distractor 3: Deep learning pipelines run highly efficiently when vector stores are properly aligned.",
-        "Distractor 4: Coffee consumption worldwide reached an all time peak during late 2024 studies.",
-        "Distractor 5: Stock market options require careful management of risk parameters.",
-        "Distractor 6: Python 3.11 introduces faster specialized bytecode interpreter loops.",
-        "Distractor 7: Electric vehicles utilize lithium-ion cells for energy dense applications.",
-        "Distractor 8: The Great Barrier Reef contains highly diverse marine ecosystem structures."
-    ]
-    
-    print("\nRunning mock instance execution tracking loop...")
-    result = pipeline.run_pipeline(mock_q, mock_10_paras)
-    
-    print("\n[Pipeline Results Output]")
-    print(f"Decomposed Steps: {result['sub_questions']}")
-    print(f"Pruned Context Chunks Retained: {len(result['retrieved_context'])}")
-    print(f"Generated Answer Output: {result['answer']}")

@@ -18,7 +18,7 @@ class HopController:
     Handles question decomposition using google/flan-t5-large to break 
     multi-hop questions down into sequential single-hop search tasks.
     """
-    def __init__(self, device: str = "cuda" if torch.cuda.is_available() else "cpu"):
+    def __init__(self, device: str = "cpu"):
         # FORCE device to cpu for this heavy model to save VRAM for the PRM Scorer
         self.device = "cpu" 
         self.model_name = "google/flan-t5-large"
@@ -67,7 +67,7 @@ class LocalFAISSRetriever:
     Manages a localized, transient FAISS index built strictly from the 10 
     candidate paragraphs provided in the HotpotQA distractor setting packet.
     """
-    def __init__(self, device: str = "cuda" if torch.cuda.is_available() else "cpu"):
+    def __init__(self, device: str = "cpu"):
         # FORCE embedder to CPU to save VRAM
         self.device = "cpu"
         # BGE-base-en-v1.5 outputs 768-dimensional dense vectors

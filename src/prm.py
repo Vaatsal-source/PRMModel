@@ -57,13 +57,17 @@ class PRMScorer(nn.Module):
         
         # Binary classification head processing the pooled representation
         self.classifier = nn.Linear(hidden_size, 1)
+        
+        # Aggressively reduce VRAM footprints if gradient checkpointing is supported
+        if hasattr(self.encoder, "gradient_checkpointing_enable"):
+            self.encoder.gradient_checkpointing_enable()
 
     def forward(self, input_ids, attention_mask):
         outputs = self.encoder(input_ids=input_ids, attention_mask=attention_mask)
         # Use the CLS token representation (first token)
         cls_output = outputs.last_hidden_state[:, 0, :]
         logits = self.classifier(cls_output)
-        return logits.squeeze(-1) # Output raw un-activated logits (Safe for AMP Autocast)
+        return logits.squeeze(-1)  # Output raw un-activated logits (Safe for AMP Autocast)
 
 
 def train_prm(
@@ -156,7 +160,7 @@ def train_prm(
 
 def threshold_prune(passages: List[str], scores: List[float], t: float) -> List[str]:
     """
-    Applies the PRM gate threshold ablation rule. 
+    Applying the PRM gate threshold ablation rule. 
     Filters out any context blocks that score strictly below the target threshold value.
     """
     pruned_passages = [p for p, score in zip(passages, scores) if score >= t]
